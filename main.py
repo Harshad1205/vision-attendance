@@ -1,11 +1,9 @@
 import os
-import io
 import datetime
 import urllib.parse
 import urllib.request
 import numpy as np
 import cv2
-from PIL import Image
 from bson.binary import Binary
 from pymongo import MongoClient, errors
 from fastapi import FastAPI, Request, Form, UploadFile
@@ -23,7 +21,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # ============================================================
-# MONGODB CONFIGURATION
+# MONGODB ATLAS CLUSTER CONFIGURATION
 # ============================================================
 MONGO_USER = os.getenv("MONGO_USER", "vision_admin")
 MONGO_PASS = os.getenv("MONGO_PASS", "vision_123")
@@ -37,7 +35,6 @@ MONGO_URI = os.getenv("MONGO_URI", DEFAULT_URI)
 try:
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
     db = client["visionpass_db"]
-    # Quick connectivity test
     client.admin.command("ping")
     print("[INFO] Connected to MongoDB Atlas successfully.")
 except errors.PyMongoError as e:
@@ -50,14 +47,11 @@ except errors.PyMongoError as e:
 CASCADE_FILE = "haarcascade_frontalface_default.xml"
 
 def get_face_cascade():
-    """Ensures a valid Haar Cascade classifier is always loaded."""
-    # 1. Check local directory
     if os.path.exists(CASCADE_FILE) and os.path.getsize(CASCADE_FILE) > 50000:
         cascade = cv2.CascadeClassifier(CASCADE_FILE)
         if not cascade.empty():
             return cascade
 
-    # 2. Check OpenCV built-in directory
     if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
         builtin_path = os.path.join(cv2.data.haarcascades, CASCADE_FILE)
         if os.path.exists(builtin_path):
@@ -65,7 +59,6 @@ def get_face_cascade():
             if not cascade.empty():
                 return cascade
 
-    # 3. Download directly from OpenCV official repo
     url = f"https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/{CASCADE_FILE}"
     try:
         print("[INFO] Fetching Haar Cascade XML from GitHub...")
@@ -80,8 +73,7 @@ def get_face_cascade():
 
 face_cascade = get_face_cascade()
 
-def extract_face(image_bytes: bytes):
-    """Detects, crops, and normalizes a face from binary image bytes."""
+def extract_face(image_bytes):
     if not image_bytes:
         return None, None
 
@@ -101,7 +93,6 @@ def extract_face(image_bytes: bytes):
     if len(faces) == 0:
         return None, None
 
-    # Use the largest detected face
     x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
     face_roi = cv2.resize(gray[y:y + h, x:x + w], (120, 120))
     _, buffer = cv2.imencode(".jpg", face_roi)
@@ -146,7 +137,7 @@ def get_logs():
         return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
 
 @app.post("/api/register")
-async def register(name: str = Form(...), frame: UploadFile = None):
+async def register(name: str = Form(""), frame: UploadFile = None):
     if db is None:
         return JSONResponse({"status": "error", "message": "Database not reachable."}, status_code=503)
 
@@ -163,7 +154,6 @@ async def register(name: str = Form(...), frame: UploadFile = None):
         return JSONResponse({"status": "error", "message": "No face detected in camera capture."}, status_code=400)
 
     try:
-        # Determine incremental user_id safely
         highest = db.users.find_one(sort=[("user_id", -1)])
         user_id = (int(highest["user_id"]) + 1) if (highest and "user_id" in highest) else 1
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -188,7 +178,7 @@ async def register(name: str = Form(...), frame: UploadFile = None):
         return JSONResponse({"status": "error", "message": f"Registration failed: {str(exc)}"}, status_code=500)
 
 @app.post("/api/scan")
-async def scan(action: str = Form(...), frame: UploadFile = None):
+async def scan(action: str = Form("ENTRY"), frame: UploadFile = None):
     if db is None:
         return JSONResponse({"status": "error", "message": "Database not reachable."}, status_code=503)
 
@@ -221,15 +211,13 @@ async def scan(action: str = Form(...), frame: UploadFile = None):
         if not training_faces or not labels:
             return JSONResponse({"status": "error", "message": "Invalid training data in database."}, status_code=400)
 
-        # Check LBPH availability
         if not hasattr(cv2, "face") or not hasattr(cv2.face, "LBPHFaceRecognizer_create"):
-            return JSONResponse({"status": "error", "message": "opencv-contrib-python is required for LBPH."}, status_code=500)
+            return JSONResponse({"status": "error", "message": "opencv-contrib-python-headless required."}, status_code=500)
 
         recognizer = cv2.face.LBPHFaceRecognizer_create()
         recognizer.train(training_faces, np.array(labels, dtype=np.int32))
         pred_id, dist = recognizer.predict(face_roi)
 
-        # Distance threshold (lower distance = stronger match)
         RECOGNITION_THRESHOLD = 70.0
 
         if dist <= RECOGNITION_THRESHOLD and pred_id in user_map:
