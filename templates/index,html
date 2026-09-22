@@ -1,0 +1,61 @@
+Set-Content -Path "templates\index.html" -Value @'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VisionPass Enterprise | Cloud Kiosk</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>VisionPass Cloud AI</h1>
+            <span class="badge">MongoDB Atlas Connected</span>
+        </header>
+
+        <div class="main-grid">
+            <div class="panel camera-panel">
+                <video id="webcam" autoplay playsinline muted></video>
+                <canvas id="snapshot" style="display:none;"></canvas>
+                
+                <div class="btn-row">
+                    <button class="btn btn-entry" onclick="submitScan('ENTRY')">➔ Scan Entry</button>
+                    <button class="btn btn-exit" onclick="submitScan('EXIT')">➔ Scan Exit</button>
+                </div>
+                <div id="status-bar">Status: Ready</div>
+
+                <div class="cards-grid">
+                    <div class="card card-entry">
+                        <h4>LATEST ENTRY</h4>
+                        <p id="entry-val">None</p>
+                    </div>
+                    <div class="card card-exit">
+                        <h4>LATEST EXIT</h4>
+                        <p id="exit-val">None</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel sidebar-panel">
+                <div class="reg-box">
+                    <h3>Register New Face</h3>
+                    <input type="text" id="reg-name" placeholder="Enter Full Name...">
+                    <button class="btn btn-reg" onclick="registerFace()">📷 Capture & Save to Mongo</button>
+                </div>
+
+                <h3>Live Attendance Stream</h3>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr><th>Name</th><th>Action</th><th>Time</th></tr>
+                        </thead>
+                        <tbody id="logs-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
+'@
