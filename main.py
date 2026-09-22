@@ -13,12 +13,16 @@ from fastapi.templating import Jinja2Templates
 
 app = FastAPI(title="VisionPass Enterprise")
 
-# Ensure required directories exist
-os.makedirs("static", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
+# Resolve absolute path to the current file's directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(TEMPLATES_DIR, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 # ============================================================
 # MONGODB ATLAS CONFIGURATION
@@ -44,25 +48,24 @@ except errors.PyMongoError as e:
 # ============================================================
 # HAAR CASCADE FACE DETECTOR LOADER
 # ============================================================
-CASCADE_FILE = "haarcascade_frontalface_default.xml"
+CASCADE_FILE = os.path.join(BASE_DIR, "haarcascade_frontalface_default.xml")
 
 def get_face_cascade():
-    """Loads Haar Cascade locally or downloads if missing."""
     if os.path.exists(CASCADE_FILE) and os.path.getsize(CASCADE_FILE) > 50000:
         cascade = cv2.CascadeClassifier(CASCADE_FILE)
         if not cascade.empty():
             return cascade
 
     if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
-        builtin_path = os.path.join(cv2.data.haarcascades, CASCADE_FILE)
+        builtin_path = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
         if os.path.exists(builtin_path):
             cascade = cv2.CascadeClassifier(builtin_path)
             if not cascade.empty():
                 return cascade
 
-    url = f"https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/{CASCADE_FILE}"
+    url = "https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/haarcascade_frontalface_default.xml"
     try:
-        print("[INFO] Fetching Haar Cascade XML from OpenCV repository...")
+        print("[INFO] Downloading Haar Cascade XML from OpenCV...")
         urllib.request.urlretrieve(url, CASCADE_FILE)
         cascade = cv2.CascadeClassifier(CASCADE_FILE)
         if not cascade.empty():
@@ -75,7 +78,6 @@ def get_face_cascade():
 face_cascade = get_face_cascade()
 
 def extract_face(image_bytes):
-    """Crops and normalizes the largest face found in image bytes."""
     if not image_bytes:
         return None, None
 
@@ -106,6 +108,12 @@ def extract_face(image_bytes):
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
+    index_file = os.path.join(TEMPLATES_DIR, "index.html")
+    if not os.path.exists(index_file):
+        return HTMLResponse(
+            f"<h3>Configuration Warning</h3><p>Could not locate <code>{index_file}</code> on server.</p>",
+            status_code=500
+        )
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/api/logs")
