@@ -1,4 +1,3 @@
-Set-Content -Path "templates\index.html" -Value @'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -58,4 +57,3 @@ Set-Content -Path "templates\index.html" -Value @'
     <script src="/static/app.js"></script>
 </body>
 </html>
-'@

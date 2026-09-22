@@ -21,7 +21,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # ============================================================
-# MONGODB ATLAS CLUSTER CONFIGURATION
+# MONGODB ATLAS CONFIGURATION
 # ============================================================
 MONGO_USER = os.getenv("MONGO_USER", "vision_admin")
 MONGO_PASS = os.getenv("MONGO_PASS", "vision_123")
@@ -47,6 +47,7 @@ except errors.PyMongoError as e:
 CASCADE_FILE = "haarcascade_frontalface_default.xml"
 
 def get_face_cascade():
+    """Loads Haar Cascade locally or downloads if missing."""
     if os.path.exists(CASCADE_FILE) and os.path.getsize(CASCADE_FILE) > 50000:
         cascade = cv2.CascadeClassifier(CASCADE_FILE)
         if not cascade.empty():
@@ -61,19 +62,20 @@ def get_face_cascade():
 
     url = f"https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/{CASCADE_FILE}"
     try:
-        print("[INFO] Fetching Haar Cascade XML from GitHub...")
+        print("[INFO] Fetching Haar Cascade XML from OpenCV repository...")
         urllib.request.urlretrieve(url, CASCADE_FILE)
         cascade = cv2.CascadeClassifier(CASCADE_FILE)
         if not cascade.empty():
             return cascade
     except Exception as exc:
-        print(f"[ERROR] Could not download Haar Cascade: {exc}")
+        print(f"[ERROR] Could not load or download Haar Cascade: {exc}")
 
     raise RuntimeError("Haar Cascade Classifier could not be initialized.")
 
 face_cascade = get_face_cascade()
 
 def extract_face(image_bytes):
+    """Crops and normalizes the largest face found in image bytes."""
     if not image_bytes:
         return None, None
 
