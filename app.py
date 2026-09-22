@@ -1,18 +1,17 @@
 import os
 import sys
 import csv
-import cv2
+import io
 import datetime
 import urllib.request
 import urllib.parse
 import numpy as np
+import cv2
 from PIL import Image
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from pymongo import MongoClient, errors
 from bson.binary import Binary
-import io
-
 # ============================================================
 # CONFIGURATION & CREDENTIALS
 # ============================================================
@@ -26,14 +25,14 @@ MIN_FACE_SIZE = (80, 80)
 ADMIN_PASSWORD = "admin"
 
 # --- MongoDB Atlas Connection Settings ---
-MONGO_USER = "vision_admin"
-MONGO_PASS = "vision_123"
+MONGO_USER = os.getenv("MONGO_USER", "vision_admin")
+MONGO_PASS = os.getenv("MONGO_PASS", "vision_123")
 
 ENCODED_USER = urllib.parse.quote_plus(MONGO_USER)
 ENCODED_PASS = urllib.parse.quote_plus(MONGO_PASS)
 
-# MongoDB Cluster Host URI
-MONGO_URI = f"mongodb+srv://{ENCODED_USER}:{ENCODED_PASS}@cluster0.zpn3evs.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+DEFAULT_URI = f"mongodb+srv://{ENCODED_USER}:{ENCODED_PASS}@cluster0.zpn3evs.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+MONGO_URI = os.getenv("MONGO_URI", DEFAULT_URI)
 DB_NAME = "visionpass_db"
 
 ctk.set_appearance_mode("Dark")
@@ -124,13 +123,14 @@ class VisionPassApp(ctk.CTk):
                 "Database Warning",
                 "Could not connect to MongoDB Atlas.\nCheck network access whitelist or credentials."
             )
+            self.db = None
 
     def load_user_mappings(self):
         if self.db is None:
             return
         try:
             cursor = self.db.users.find({}, {"user_id": 1, "name": 1})
-            self.user_map = {doc["user_id"]: doc["name"] for doc in cursor if "user_id" in doc}
+            self.user_map = {int(doc["user_id"]): doc["name"] for doc in cursor if "user_id" in doc}
         except Exception as e:
             print(f"[ERROR] Failed to load users from MongoDB: {e}")
 
@@ -158,7 +158,7 @@ class VisionPassApp(ctk.CTk):
         else:
             cap = cv2.VideoCapture(0)
 
-        if cap.isOpened():
+        if cap is not None and cap.isOpened():
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         return cap
@@ -167,8 +167,8 @@ class VisionPassApp(ctk.CTk):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         local_path = os.path.join(base_dir, CASCADE_FILE)
 
-        if not os.path.exists(local_path) or os.path.getsize(local_path) < 100000:
-            url = "https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/" + CASCADE_FILE
+        if not os.path.exists(local_path) or os.path.getsize(local_path) < 50000:
+            url = f"https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/{CASCADE_FILE}"
             try:
                 urllib.request.urlretrieve(url, local_path)
             except Exception as e:
@@ -178,16 +178,17 @@ class VisionPassApp(ctk.CTk):
         if not cascade.empty():
             return cascade
 
-        if hasattr(cv2, "data"):
+        if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
             builtin_path = os.path.join(cv2.data.haarcascades, CASCADE_FILE)
-            cascade = cv2.CascadeClassifier(builtin_path)
-            if not cascade.empty():
-                return cascade
+            if os.path.exists(builtin_path):
+                cascade = cv2.CascadeClassifier(builtin_path)
+                if not cascade.empty():
+                    return cascade
 
-        raise FileNotFoundError("Could not load Haar Cascade.")
+        raise FileNotFoundError("Could not load Haar Cascade XML.")
 
     def load_recognition_model(self):
-        if not hasattr(cv2, "face"):
+        if not hasattr(cv2, "face") or not hasattr(cv2.face, "LBPHFaceRecognizer_create"):
             self.model_ready = False
             return
 
@@ -403,9 +404,9 @@ class VisionPassApp(ctk.CTk):
                     face_roi = cv2.resize(gray[y:y+h, x:x+w], (200, 200))
                     user_id, dist = self.recognizer.predict(face_roi)
 
-                    if dist <= RECOGNITION_THRESHOLD and user_id in self.user_map:
-                        detected_person = self.user_map[user_id]
-                        detected_id = user_id
+                    if dist <= RECOGNITION_THRESHOLD and int(user_id) in self.user_map:
+                        detected_person = self.user_map[int(user_id)]
+                        detected_id = int(user_id)
                         detected_dist = int(dist)
                         box_color = (0, 255, 0)
                         label_text = f"{detected_person} ({detected_dist})"
@@ -447,10 +448,10 @@ class VisionPassApp(ctk.CTk):
 
         existing_user = self.db.users.find_one({"name": new_name}) if self.db is not None else None
         if existing_user:
-            user_id = existing_user["user_id"]
+            user_id = int(existing_user["user_id"])
         else:
             highest_user = self.db.users.find_one(sort=[("user_id", -1)]) if self.db is not None else None
-            user_id = (highest_user["user_id"] + 1) if (highest_user and "user_id" in highest_user) else 1
+            user_id = (int(highest_user["user_id"]) + 1) if (highest_user and "user_id" in highest_user) else 1
             now_iso = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if self.db is not None:
                 self.db.users.insert_one({"user_id": user_id, "name": new_name, "created_at": now_iso})
@@ -484,7 +485,7 @@ class VisionPassApp(ctk.CTk):
                 img_path = os.path.join(user_folder, f"face_{captured}.jpg")
                 cv2.imwrite(img_path, face)
 
-                # Save 1st face snapshot directly into MongoDB Binary
+                # Save snapshot as binary for database storage
                 if captured == 1:
                     _, buffer = cv2.imencode('.jpg', face)
                     preview_binary = Binary(buffer.tobytes())
@@ -503,7 +504,7 @@ class VisionPassApp(ctk.CTk):
             self.video_label.image = ctk_image
             self.update()
 
-        # Upload face photo to MongoDB
+        # Save photo record to MongoDB
         if self.db is not None and preview_binary is not None:
             self.db.face_photos.update_one(
                 {"user_id": user_id},
@@ -516,11 +517,11 @@ class VisionPassApp(ctk.CTk):
         self.scan_out_btn.configure(state="normal")
         self.name_entry.delete(0, 'end')
 
-        self.status_label.configure(text=f"Uploaded {new_name} photo & retrained model!", text_color="#57AB5A")
+        self.status_label.configure(text=f"Uploaded {new_name} & updated model!", text_color="#57AB5A")
         self.train_model()
 
     def train_model(self):
-        if not hasattr(cv2, "face"):
+        if not hasattr(cv2, "face") or not hasattr(cv2.face, "LBPHFaceRecognizer_create"):
             self.status_label.configure(text="Install opencv-contrib-python!", text_color="#E5534B")
             return
 
@@ -545,7 +546,8 @@ class VisionPassApp(ctk.CTk):
 
         try:
             recognizer = cv2.face.LBPHFaceRecognizer_create()
-            recognizer.train(faces, np.array(labels))
+            # Explicit contiguous 32-bit integer array to prevent native memory exceptions
+            recognizer.train(faces, np.array(labels, dtype=np.int32))
             recognizer.write(os.path.join(DATASET_DIR, "trainer.yml"))
             self.recognizer = recognizer
             self.model_ready = True
@@ -563,7 +565,7 @@ class VisionPassApp(ctk.CTk):
         # Save record to MongoDB
         if self.db is not None:
             self.db.attendance.insert_one({
-                "user_id": self.recognized_id,
+                "user_id": int(self.recognized_id),
                 "name": self.recognized_name,
                 "action": action,
                 "timestamp": now_str
@@ -595,7 +597,7 @@ class VisionPassApp(ctk.CTk):
         latest_entry = self.db.attendance.find_one({"action": "ENTRY"}, sort=[("_id", -1)])
         if latest_entry:
             self.entry_info_lbl.configure(text=f"Name: {latest_entry.get('name')}\nTime: {latest_entry.get('timestamp')}")
-            photo_doc = self.db.face_photos.find_one({"user_id": latest_entry.get("user_id")})
+            photo_doc = self.db.face_photos.find_one({"user_id": int(latest_entry.get("user_id"))})
             if photo_doc and "image_bytes" in photo_doc:
                 pil_img = Image.open(io.BytesIO(photo_doc["image_bytes"]))
                 ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(65, 65))
@@ -606,7 +608,7 @@ class VisionPassApp(ctk.CTk):
         latest_exit = self.db.attendance.find_one({"action": "EXIT"}, sort=[("_id", -1)])
         if latest_exit:
             self.exit_info_lbl.configure(text=f"Name: {latest_exit.get('name')}\nTime: {latest_exit.get('timestamp')}")
-            photo_doc = self.db.face_photos.find_one({"user_id": latest_exit.get("user_id")})
+            photo_doc = self.db.face_photos.find_one({"user_id": int(latest_exit.get("user_id"))})
             if photo_doc and "image_bytes" in photo_doc:
                 pil_img = Image.open(io.BytesIO(photo_doc["image_bytes"]))
                 ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(65, 65))
